@@ -154,7 +154,7 @@ success_repr_males = 1 # Chance of reproductive males to have an offspring (p in
 success_dominant_males = 1 # Chance of dominant males to have an offspring (p in binomial distribution)
 
 
-iterations = 50 #number of iterations
+iterations = 500 #number of iterations
 generations = 50 # number of generations in each iteration
 
 ## Migration proportions
