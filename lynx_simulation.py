@@ -38,7 +38,7 @@ def lynxMother(pop, subPop):
         female.hc = 1
         yield female
 
-# Number of kittens
+#To Do simulate lethal equivalents
 def demoModel(gen, pop):
     sim.stat(pop, popSize=True, subPops=[0], suffix="_a")  # Dinaric subpop size
     sim.stat(pop, popSize=True, subPops=[(0, 2)], suffix="_din_old_m")
@@ -65,16 +65,40 @@ def NaturalMortality(pop):
     return True
 
 
+
+## Statistics
+def CalcStats(pop, param):
+    sim.stat(pop = pop, popSize = True,  heteroFreq=sim.ALL_AVAIL,
+             inbreeding=sim.ALL_AVAIL, subPops=[0]) # calculate number of animals, IBS, IBD and observed heterozygosity for Din pop
+    H_obs_din = np.mean(list(pop.vars()["heteroFreq"].values()))  # observed heterozygosity, multiple loci
+    sim.stat(pop=pop, effectiveSize=sim.ALL_AVAIL, vars="Ne_LD_sp")  # calculate Ne for both populations separately
+    sim.stat(pop, alleleFreq=sim.ALL_AVAIL, subPops=[0])
+    H_exp_din = np.mean([sum([x*x for x in pop.vars()["alleleFreq"][i].values()])
+                         for i in range(len(pop.vars()["alleleFreq"]))]) #expected heterozygosity for multiple loci
+    sim.stat(pop, alleleFreq=sim.ALL_AVAIL, subPops=[1])
+    H_exp_slovak = np.mean([sum([x * x for x in pop.vars()["alleleFreq"][i].values()])
+                         for i in range(len(pop.vars()["alleleFreq"]))])  # expected heterozygosity for multiple loci
+    F_eff = 1 - H_exp_din/H_exp_slovak
+    IBD_din = np.mean(list(pop.vars()["IBD_freq"].values()))
+    relative_fitness = 1 -np.e**(-6*F_eff)
+    a = pd.DataFrame({'Generation': [pop.dvars().gen], 'N_din': [pop.dvars().subPopSize[0]],
+                  "Ne_LD": [pop.dvars(0).Ne_LD[0.01]],  # 0.01 threshold
+                  "Het_exp_din": [H_exp_din], "Het_obs_din": [H_obs_din], "F_eff": [F_eff],
+                  "IBD_din": [IBD_din], "relative_fitness" : [relative_fitness]})
+    param["x"].append(a)
+    return True
+
+
+
+
 def simulation(iterations, generations, TransFreq, TransMales, TransFem):
-    x = []  # empty list to store LD Ne calculations
-    Ne = [] # empty list to store demographic Ne calculations
-    
+    x = []  # empty list to store statistics
     for i in range(iterations):
         pop = sim.Population(size = [71, 1500], loci=[1]*20,
                                  infoFields = ["age",'ind_id', 'father_idx', 'mother_idx', "mating", "hc",'migrate_to'],
                                  subPopNames = ["Dinaric", "Slovak"])
         # Set age for Dinaric population
-        sim.initInfo(pop = pop, values = list(map(int, np.random.negative_binomial(n = 1, p = 0.25, size=71))),
+        sim.initInfo(pop = pop, values = list(map(int, np.random.negative_binomial(n = 1, p = 0.25, size=71))), # check
                      infoFields="age", subPops = [0])
         # Set age for Slovak population randomly in interval from 1 to 5 years
         sim.initInfo(pop = pop, values = list(map(int, np.random.randint(1, 5 +1, 1500))),
@@ -89,7 +113,9 @@ def simulation(iterations, generations, TransFreq, TransMales, TransFem):
         pop.evolve(
             initOps=[
                 sim.InitSex(),
+
                 # TO DO: separately for Din and Slovak
+
                 # genotype from empirical allele frequencies and number of alleles
                 sim.InitGenotype(freq=[0.2, 0.7, 0.1]),
                 # assign an unique ID to everyone.
@@ -132,48 +158,37 @@ def simulation(iterations, generations, TransFreq, TransMales, TransFem):
             ], subPopSize=demoModel), #Demomodel can be used for abundancy estimates
 
             postOps = [
-                sim.PyOperator(func = popmodel.CalcNe, param={"me":me, "Ne":Ne}, begin=int(0.2*generations)),
-                sim.PyOperator(func = popmodel.CalcLDNe, param={"me":me, "x":x}, begin=int(0.2*generations))
+                sim.PyOperator(func = CalcStats, param={"x":x}, begin=int(0.2*generations))
                        ],
 
             gen = generations
         )
     x = pd.concat(x)
-    Ne = pd.concat(Ne)
-    x.loc[x["population"] ==0,"population"] = "cro"
-    x.loc[x["population"] ==1,"population"] = "slo"
-    x = x[x['cutoff'] == 0]
-    x = x.rename(columns={0: "Ne"})
-    return x, Ne
+    return x
 
 
 #Baseline values
 
-#success_repr_males and success_dominant_males must be global variables, so it need to be set by the same name as here
-success_repr_males = 1 # Chance of reproductive males to have an offspring (p in binomial distribution)
-success_dominant_males = 1 # Chance of dominant males to have an offspring (p in binomial distribution)
 
-
-iterations = 50 #number of iterations
-generations = 50 # number of generations in each iteration
+iterations = 5 #number of iterations
+generations = 10 # number of generations in each iteration
 
 ## Migration proportions
-cro_to_slo = 0 #proportion of reproductive males, migrating from Croatia to Slovenia
-slo_to_cro = 0 # and from Slovenia to Croatia.
-TransFreq = 1 # one time per year
-TransMales = 10 #one animal per year
-TransFem = 10
+TransFreq = 1 # per one year
+TransMales = 1 #number of males per year
+TransFem = 1 #number of females per year
+
+Stats = simulation(iterations, generations, TransFreq, TransMales, TransFem)
 
 
 
 
+#Plot
+sns.relplot(x="Generation", y="Het_exp_din", kind="line", data=Stats)
 
 
-#The function returns two dataframes: the first is Ne LD and the second is Ne demographic (EXACTLY THIS ORDER).
-Ne_LD_baseline, Ne_demo_baseline = simulation(me, iterations, generations, cro_to_slo, slo_to_cro, slo_cull, cro_cull)
 
-#Plot demographic (direct) effecitve population size dynamics
-sns.relplot(x="gen", y="Ne", col = "me", hue="population", kind="line", data=Ne_demo_baseline)
+
 
 #Plot linkage disequilibrium effecitve population size dynamics
 sns.relplot(x="gen", y="Ne", col = "me", hue="population", kind="line", data=Ne_LD_baseline)
