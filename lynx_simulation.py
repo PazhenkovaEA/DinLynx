@@ -14,8 +14,11 @@ import numpy as np
 import seaborn as sns
 import popmodel #contains all functions for simulation
 import random as random
+from scipy.stats import bernoulli
 
-
+"""
+не вылетает в случае вымирания
+"""
 # allele frequencies import
 af = pd.read_excel("/Users/elena/Desktop/Lynx_AlleleFrequencies_Sep2021.xlsx", engine='openpyxl')
 allele_freqs = af.groupby(["Population","Marker"])["Frequency"].agg(lambda x: list(x))
@@ -33,23 +36,22 @@ def lynxFather(pop, subPop):
 
 #Pick a female lynx. Female can mate only if she has no kittens.
 def lynxMother(pop, subPop):
-    all_females = [x for x in pop.individuals(subPop) if x.sex() == sim.FEMALE and x.hk == 0 and x.age >= 2] # hk = have kittens (0 - no . All females of reproductive age (older then 2 years)
+    all_females = [x for x in pop.individuals(subPop) if x.sex() == sim.FEMALE and x.age >= 2] # All females of reproductive age (older then 2 years)
 
     #print("lynxMother: number of suitable females: {}".format(len(all_females)))
     while True:
         pick_female = np.random.randint(0, (len(all_females)))
         female = all_females[pick_female]
-        female.hk = 1
         yield female
 
-#To Do simulate lethal equivalents
+#ПРОВЕРЬ!
 def demoModel(gen, pop):
     sim.stat(pop, popSize=True, subPops=[0], suffix="_a")  # Dinaric subpop size
     sim.stat(pop, popSize=True, subPops=[(0, 2)], suffix="_din_old_m")
     sim.stat(pop, popSize=True, subPops=[(0, 5)], suffix="_din_old_f")
     sim.stat(pop, popSize=True, subPops=[1], suffix="_b")  # Slovak subpop size
 
-    fems_din = [x for x in pop.individuals(0) if x.sex() == sim.FEMALE and x.hk == 0 and x.age >= 2]
+    fems_din = [x for x in pop.individuals(0) if x.sex() == sim.FEMALE and x.age >= 2]
 
     if len(fems_din) == 0:
         size_f_din = 0
@@ -68,8 +70,6 @@ def NaturalMortality(pop):
     out_ids = [x.ind_id for x in sampling_m]
     pop.removeIndividuals(IDs=out_ids, idField="ind_id")
     return True
-
-
 
 ## Statistics
 def CalcStats(pop, param):
@@ -93,14 +93,44 @@ def CalcStats(pop, param):
     param["x"].append(a)
     return True
 
+def InbreedingLoad(pop):
+    ids = [ind.ind_id for ind in pop.individuals() if ind.IBD != 0]
+    not_survival = []
+    for ind in ids:
+        F = pop.indByID(ind).IBD
+        survival_probability = 2.71828 ** (- B * F) #eq 4 from Nietlisbach et al 2019 (doi: 10.1111/eva.12713)
+        survival = int(bernoulli.rvs(size=1, p=survival_probability))
+        if survival == 0:
+            not_survival.append(ind)
+    pop.removeIndividuals(IDs=not_survival, idField="ind_id")
+    print(len(not_survival))
+    return True
 
+def IBD(pop):
+    ids = [ind.ind_id for ind in pop.individuals() if ind.IBD==0]
+    for ind in ids:
+        if (pop.indByID(ind).father_id == 0) or (pop.indByID(ind).mother_id == 0):
+            F = 0
+        else:
+            offspring = len(set(pop.indByID(ind).lineage()))
+            try:
+                mother = len(set(pop.indByID(pop.indByID(ind).mother_id).lineage()))
+            except:
+                continue
+            try:
+                father = len(set(pop.indByID(pop.indByID(ind).father_id).lineage()))
+            except:
+                continue
+            F = (1 - (offspring/(mother+father)))*0.5
+        pop.indByID(ind).setInfo(F, 'IBD')
+    return True
 
 
 def simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq=1,TransStart=1, allele_freqs = allele_freqs):
     x = []  # empty list to store statistics
     for i in range(iterations):
         pop = sim.Population(size = [n_Din, 5000], loci=[1]*19, #for now number of loci and subpopnames must be the same as in empirical data
-                                 infoFields = ["age",'ind_id', 'father_idx', 'mother_idx', "mating", "hk",'migrate_to'],
+                                 infoFields = ["age",'ind_id', 'father_id', 'mother_id', "mating",'migrate_to', "IBD"],
                                  subPopNames = ["Dinaric", "Carpathian"])
         # Set age for Dinaric population
         sim.initInfo(pop = pop, values = list(map(int, np.random.negative_binomial(n = 0.8, p = 0.27, size=71))), # check
@@ -114,26 +144,20 @@ def simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq=1
                 sim.initGenotype(pop, prop=allele_freqs[name][i], loci=i, subPops=[name]) # freq for allele frequencies
 
         # We need VirtualSplitter to transfer non-reproductive animals to the new generation
-
         pop.setVirtualSplitter(sim.CombinedSplitter([
             sim.ProductSplitter([
                 sim.SexSplitter(),
                 sim.InfoSplitter(field = "age", cutoff = [2,13])])])) # add vspMap, if needed
+
         pop.evolve(
             initOps=[
                 sim.InitSex(),
-
-                # TO DO: separately for Din and Slovak
-
-                # genotype from empirical allele frequencies and number of alleles
-                #sim.InitGenotype(freq=[0.2, 0.7, 0.1]),
-                # assign an unique ID to everyone.
-                sim.IdTagger(),
+                sim.InitLineage(),
+                sim.IdTagger(), # needed for IBD
             ],
             # increase the age of everyone by 1 before mating only in Dinaric population.
             preOps=[sim.InfoExec('age += 1', subPops=[0]),
                     sim.PyOperator(func=NaturalMortality, subPops=[0]), # apply only to Dinaric
-                    sim.InfoExec("hk +=1 if 0 < hk < 2  else 0"), # Females can have kittens ones per 2 years
                     # Different translocation scenarios
                     sim.Migrator(rate=[
                             [TransMales,0], # in the migration matrix columns = populations, rows = subpopulations, position - where to migrate
@@ -157,8 +181,8 @@ def simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq=1
                     generator=sim.OffspringGenerator(ops=[
                         sim.InfoExec("age = 0"),
                         sim.IdTagger(),
-                        #sim.PedigreeTagger(),
-                        sim.ParentsTagger(),
+                        sim.PedigreeTagger(),
+                        #sim.ParentsTagger(),
                         sim.MendelianGenoTransmitter()
                     ], numOffspring=(sim.UNIFORM_DISTRIBUTION, 1, 4))),
                 sim.CloneMating(subPops=[(0,0), (0,1), (0,3), (0,4), 1], weight=-1),
@@ -166,9 +190,10 @@ def simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq=1
             ], subPopSize=demoModel), #Demomodel can be used for abundancy estimates
 
             postOps = [
-                sim.PyOperator(func = CalcStats, param={"x":x}, begin=int(0.2*generations))
+                sim.PyOperator(func = CalcStats, param={"x":x}, begin= int(0.2*generations)),
+                sim.PyOperator(func=IBD, subPops=[0]),
+                sim.PyOperator(func=InbreedingLoad, subPops=[0]), # apply only to Dinaric
                        ],
-
             gen = generations
         )
     x = pd.concat(x)
@@ -177,9 +202,9 @@ def simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq=1
 
 #Baseline values
 
-iterations = 15 #number of iterations
+iterations = 1 #number of iterations
 generations = 20 # number of generations in each iteration
-n_Din = 71 # number of animals in Dinaric populaiton
+n_Din = 20 # number of animals in Dinaric populaiton
 ## Migration proportions
 TransFreq = 1 # per one year, minimum value is 1
 TransMales = 0 # number of translocated males per year
@@ -191,13 +216,14 @@ litter_size = 1.9
 Mortality = 0.25
 surivival_rate_kittens = 0.6 #calculated for Canadian lynx
 carrying_capacity = 150
+B = 3.14
 Stats = simulation(iterations, generations, n_Din, TransMales, TransFem, TransFreq,TransStart, allele_freqs)
 
-
+sim.dump(pop)
 
 
 #Plot
-sns.relplot(x="Generation", y="F_eff", kind="line", data=Stats)
+sns.relplot(x="Generation", y="N_din", kind="line", data=Stats)
 
 
 
