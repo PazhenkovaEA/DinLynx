@@ -153,22 +153,3 @@ carrying_capacity = 150
 Stats = simulation(iterations, years, n_Din, Mortality, TransMales, TransFem, TransFreq,TransStart,TransEnd, allele_freqs)
 
 
-sim.dump(pop)
-
-
-#Plot
-sns.relplot(x="Generation", y="Het_exp_din", kind="line", data=Stats)
-
-
-
-
-
-#Plot linkage disequilibrium effecitve population size dynamics
-sns.relplot(x="gen", y="Ne", col = "me", hue="population", kind="line", data=Ne_LD_baseline)
-
-
-
-
-x = np.random.negative_binomial(n = 0.8, p = 0.27, size=100)
-sns.distplot(x)
-max(x)
